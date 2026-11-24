@@ -84,6 +84,7 @@ _HYV_BK_BTN_IMPORT = "📥 Import"
 _HYV_BK_BTN_BACK = "🔙 Back"
 _HYV_BK_BTN_DB = "🗄 Database Export/Import"   # the button the admin taps to open the backup menu
 _HYV_BK_DB_LABELS = (_HYV_BK_BTN_DB, _HYV_BK_BTN_EXPORT, _HYV_BK_BTN_IMPORT)
+_HYV_BK_BTN_STYLE = "primary"   # colour of the Database button (blue), same as the bot's option buttons
 _hyv_bk_pending = {}   # admin user id -> "import" or staged restore info
 
 
@@ -246,6 +247,19 @@ def _hyv_bk_admin_chat(chat_id):
     return chat_id is not None and not isinstance(chat_id, bool) and _hyv_bk_is_admin(chat_id)
 
 
+def _hyv_bk_btn(label):
+    """The Database button with its colour (style). A python-telegram-bot version without the style field
+    gets it in api_kwargs (sent to Telegram as it is); if that fails too, a plain button."""
+    try:
+        return _hyv_bk_KB(label, style=_HYV_BK_BTN_STYLE)
+    except TypeError:
+        pass
+    try:
+        return _hyv_bk_KB(label, api_kwargs={"style": _HYV_BK_BTN_STYLE})
+    except TypeError:
+        return _hyv_bk_KB(label)
+
+
 def _hyv_bk_db_markup(markup):
     """The same reply keyboard with the Database button in one extra last row. The original object is not changed."""
     if not isinstance(markup, _hyv_bk_RKM):
@@ -254,7 +268,7 @@ def _hyv_bk_db_markup(markup):
     texts = [getattr(b, "text", b) for row in rows for b in row]
     if any(t in _HYV_BK_DB_LABELS for t in texts):
         return markup
-    rows.append([_hyv_bk_KB(_HYV_BK_BTN_DB)])
+    rows.append([_hyv_bk_btn(_HYV_BK_BTN_DB)])
     extra = {"is_persistent": markup.is_persistent} if hasattr(markup, "is_persistent") else {}
     return _hyv_bk_RKM(rows, resize_keyboard=markup.resize_keyboard, one_time_keyboard=markup.one_time_keyboard,
                        selective=markup.selective, input_field_placeholder=markup.input_field_placeholder, **extra)
