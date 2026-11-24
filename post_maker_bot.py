@@ -61,6 +61,7 @@ from telegram.ext import ApplicationHandlerStop as _hyv_bk_Stop
 from telegram.ext import CallbackQueryHandler as _hyv_bk_CQH, MessageHandler as _hyv_bk_MH
 from telegram.ext import filters as _hyv_bk_filters
 import hashlib as _hyv_bk_hash
+import inspect as _hyv_bk_inspect
 import json as _hyv_bk_json
 import os as _hyv_bk_os
 import re as _hyv_bk_re
@@ -81,6 +82,8 @@ _HYV_BK_CODE_PATH = _hyv_bk_re.compile(r"""["']([^"'\s]+\.(?:db|sqlite3?|json|cs
 _HYV_BK_BTN_EXPORT = "📤 Export"
 _HYV_BK_BTN_IMPORT = "📥 Import"
 _HYV_BK_BTN_BACK = "🔙 Back"
+_HYV_BK_BTN_DB = "🗄 Database Export/Import"   # the button the admin taps to open the backup menu
+_HYV_BK_DB_LABELS = (_HYV_BK_BTN_DB, _HYV_BK_BTN_EXPORT, _HYV_BK_BTN_IMPORT)
 _hyv_bk_pending = {}   # admin user id -> "import" or staged restore info
 
 
@@ -238,7 +241,58 @@ async def _hyv_bk_async_run(fn, *args):
     return await asyncio.to_thread(fn, *args)
 
 
+def _hyv_bk_admin_chat(chat_id):
+    """True when the chat is the private chat of an admin (in a private chat chat_id is the user id)."""
+    return chat_id is not None and not isinstance(chat_id, bool) and _hyv_bk_is_admin(chat_id)
+
+
+def _hyv_bk_db_markup(markup):
+    """The same reply keyboard with the Database button in one extra last row. The original object is not changed."""
+    if not isinstance(markup, _hyv_bk_RKM):
+        return markup
+    rows = [list(row) for row in markup.keyboard]
+    texts = [getattr(b, "text", b) for row in rows for b in row]
+    if any(t in _HYV_BK_DB_LABELS for t in texts):
+        return markup
+    rows.append([_hyv_bk_KB(_HYV_BK_BTN_DB)])
+    extra = {"is_persistent": markup.is_persistent} if hasattr(markup, "is_persistent") else {}
+    return _hyv_bk_RKM(rows, resize_keyboard=markup.resize_keyboard, one_time_keyboard=markup.one_time_keyboard,
+                       selective=markup.selective, input_field_placeholder=markup.input_field_placeholder, **extra)
+
+
+def _hyv_bk_ptb_wrap(fn, sig):
+    async def send(self, *args, **kwargs):
+        try:
+            bound = sig.bind_partial(self, *args, **kwargs)
+        except TypeError:
+            return await fn(self, *args, **kwargs)
+        if _hyv_bk_admin_chat(bound.arguments.get("chat_id")) and bound.arguments.get("reply_markup") is not None:
+            bound.arguments["reply_markup"] = _hyv_bk_db_markup(bound.arguments["reply_markup"])
+        return await fn(*bound.args, **bound.kwargs)
+    send.__name__ = fn.__name__
+    send.__qualname__ = fn.__qualname__
+    return send
+
+
+def _hyv_bk_patch_ptb_bot(bot):
+    """python-telegram-bot: the bot object gets a subclass (same name, no new fields) whose send_* methods
+    that take a reply keyboard add the Database row when the chat is an admin's private chat."""
+    base = type(bot)
+    if getattr(base, "_hyv_bk_patched", False):
+        return
+    ns = {"__slots__": (), "_hyv_bk_patched": True}
+    for name in dir(base):
+        fn = getattr(base, name, None)
+        if not name.startswith("send_") or not _hyv_bk_inspect.isfunction(fn):
+            continue
+        sig = _hyv_bk_inspect.signature(fn)
+        if "reply_markup" in sig.parameters:
+            ns[name] = _hyv_bk_ptb_wrap(fn, sig)
+    bot.__class__ = type(base.__name__, (base,), ns)
+
+
 def _hyv_bk_register(app):
+    _hyv_bk_patch_ptb_bot(app.bot)
     def is_admin(update):
         chat = update.effective_chat
         user = update.effective_user
@@ -337,7 +391,7 @@ def _hyv_bk_register(app):
         if not is_admin(update):
             return
         text = update.effective_message.text or ""
-        if text in ("/backup", "/hyvbackup"):
+        if text in ("/backup", "/hyvbackup", _HYV_BK_BTN_DB):
             await show_menu(update, context)
         elif text == _HYV_BK_BTN_EXPORT:
             await export(update, context)
